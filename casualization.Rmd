@@ -1,0 +1,430 @@
+---
+title: "Rutgers–New Brunswick is a Leader in Undermining the Tenure Track"
+date: \today
+mainfont: Garamond Premier Pro
+mainfontoptions: 
+  - Numbers=OldStyle
+  - BoldFont=Garamond Premier Pro Semibold
+mathfont: Garamond Premier Pro
+mathfontoptions: 
+  - Numbers=OldStyle
+  - BoldFont=Garamond Premier Pro Semibold
+biblatex-chicago: false
+nobib: true
+chicago-ellipses: true
+manual-title: true
+headers: true
+routput: false
+anon: false
+caption: [font=footnotesize]
+output:
+  scuro::chiaro_pdf:
+    plot_font: Garamond Premier Pro Display
+    plot_font_options: [Numbers=OldStyle]
+    fig_caption: true
+    includes:
+      in_header: preamble.tex
+  html_document:
+    fig_caption: true
+...
+
+\begin{center}
+\Large\thetitle
+\end{center}
+
+```{r setup, cache=F, include=F}
+library(tidyverse)
+library(ggrepel)
+library(knitr)
+opts_chunk$set(
+    echo=F,
+    message=F,
+    warning=F,
+    cache=T,
+    autodep=T,
+    fig.width=6,
+    fig.height=4,
+    out.width="\\textwidth"
+)
+```
+
+```{r utils}
+if (knitr::is_html_output()) {
+    pct <- function (x) scales::percent(x, suffix="%")
+} else { # latex
+    pct <- function (x) scales::percent(x, suffix="\\%")
+}
+```
+
+```{r download}
+data_dir <- "ipeds"
+if (!dir.exists(data_dir)) {
+    message("Creating data directory ", data_dir)
+    dir.create(data_dir)
+}
+
+sis_files <- file.path(data_dir, c(
+    "s2013_sis_rv.csv",
+    "s2014_sis_rv.csv",
+    "s2015_sis_rv.csv",
+    "s2016_sis_rv.csv",
+    "s2017_sis.csv"))
+oc_files <- sis_files %>% str_replace("sis", "oc")
+hd_file <- file.path(data_dir, "hd2017.csv")
+
+for (f in c(sis_files, oc_files, hd_file)) {
+    if (!file.exists(f)) {
+        zfile <- f %>%
+            str_replace("_rv", "") %>% 
+            toupper() %>%
+            str_replace("\\.CSV$", ".zip")
+        if (!file.exists(zfile)) {
+            url <- str_c("https://nces.ed.gov/ipeds/datacenter/data/",
+                         basename(zfile))
+            message("Downloading ", url)
+            download.file(url, zfile)
+            Sys.sleep(1) # don't shut down the federal government...'s server
+        }
+        message("Extracting  ", f)
+        unzip(zfile, files=basename(f), exdir=data_dir)
+    }
+}
+```
+
+```{r year_range}
+years <- str_extract(sis_files, "\\d{4}") %>% 
+    sort() %>%
+    unique() %>%
+    as.numeric()
+```
+
+
+```{r load}
+instructional <- tibble(filename=sis_files) %>%
+    mutate(year=as.numeric(str_extract(filename, "\\d{4}"))) %>%
+    mutate(frm=map(filename, read_csv)) %>%
+    unnest(frm)
+staff <- tibble(filename=oc_files) %>%
+    mutate(year=as.numeric(str_extract(filename, "\\d{4}"))) %>%
+    mutate(frm=map(filename, read_csv)) %>%
+    unnest(frm)
+
+chars <- read_csv(hd_file)
+```
+
+```{r inst_groups}
+unitid_runb <- 186380
+unitid_big10 <- c(
+    145637, #	University of Illinois at Urbana-Champaign
+    147767, #	Northwestern University
+    151351, #	Indiana University-Bloomington
+    153658, #	University of Iowa
+    163286, #	University of Maryland-College Park
+    170976, #	University of Michigan-Ann Arbor
+    171100, #	Michigan State University
+    174066, #	University of Minnesota-Twin Cities
+    181464, #	University of Nebraska-Lincoln
+    204796, #	Ohio State University-Main Campus
+    214777, #	Pennsylvania State University-Main Campus
+    240444, #	University of Wisconsin-Madison
+    243780, #	Purdue University-Main Campus
+    unitid_runb)
+```
+
+```{r teaching_categories}
+staffcats <- c(instructional=1210, # total of ft and pt teaching, not GAs
+               # ft_teaching=2210,
+               pt_teaching=3210,
+               ga_teaching=4410)
+
+total_teaching <- staff %>%
+    group_by(UNITID, year) %>%
+    filter(STAFFCAT %in% staffcats) %>%
+    mutate(STAFFCAT=factor(STAFFCAT,
+                           levels=staffcats,
+                           labels=names(staffcats))) %>%
+    select(UNITID, year, STAFFCAT, HRTOTLT) %>%
+    spread(STAFFCAT, HRTOTLT, fill=0) %>% # I think fill=0 is ok
+    mutate(teaching = instructional + ga_teaching)
+
+facstats <- c(tenured=20, tenure_track=30, ntt=40)
+ttt <- instructional %>%
+    group_by(UNITID, year) %>%
+    filter(FACSTAT %in% facstats) %>%
+    mutate(FACSTAT=factor(FACSTAT, levels=facstats,
+                          labels=names(facstats))) %>%
+    select(UNITID, year, FACSTAT, SISTOTL) %>% 
+    spread(FACSTAT, SISTOTL, fill=0) # I think fill=0 is ok
+```
+
+```{r big10_fac}
+big10_fac <- chars %>%
+    filter(UNITID %in% unitid_big10) %>%
+    select(UNITID, INSTNM) %>%
+    inner_join(total_teaching, by="UNITID") %>%
+    inner_join(ttt, by=c("UNITID", "year")) %>%
+    mutate(INSTNM=str_replace(INSTNM, "University", "U")) %>%
+    mutate(INSTNM=str_replace(INSTNM, "-Main Campus", "")) %>%
+    mutate(frac_tenured=tenured / teaching,
+           frac_tt=tenure_track / teaching,
+           frac_ttt=(tenured + tenure_track) / teaching,
+           frac_ntt=ntt / teaching,
+           frac_pt=pt_teaching / teaching,
+           frac_ga=ga_teaching / teaching)
+```
+
+# Rutgers tops the Big 10 charts for Adjuncts and NTTs
+
+Do you think courses at a research university are taught by professors and graduate TAs? Not at Rutgers–New Brunswick, where the instructional staff is `r big10_fac %>% filter(UNITID == unitid_runb, year == 2017) %>% summarize(frac=100 * (pt_teaching + ntt) / teaching) %>% pull(frac) %>% round() %>% str_c("%")` part-time or full-time non-tenure-track. This makes Rutgers–NB number one in the Big 10 for using "casual" as opposed to tenure-line faculty:
+
+```{r big10_casual, fig.cap="Proportion of instructors (faculty and TAs) who are part-time or full-time non-tenure track faculty for each of the current Big 10 campuses. IPEDS data.", fig.pos="H"}
+cas_data <- big10_fac %>%
+    mutate(frac_casual = frac_pt + frac_ntt) %>% 
+    mutate(ru=factor(UNITID == unitid_runb,
+                     labels=c("Other Big 10", "RU-NB")))
+
+ggplot(cas_data, aes(year, frac_casual, group=INSTNM, color=ru, alpha=ru)) +
+    geom_line() + geom_point() +
+    geom_text_repel(
+        data=cas_data %>% filter(year == 2017),
+        aes(year, frac_casual, label=INSTNM, color=ru),
+        alpha=1, size=3,
+        hjust=0, direction="y", nudge_x=0.2,
+        segment.size=0.2, segment.alpha=0.25) +
+    scale_x_continuous(breaks=years, limits=c(NA, 2019)) +
+    scale_y_continuous(
+        name="\\% of part-time or full-time NTT instructors",
+        limits=c(0, NA),
+        labels=pct) +
+    scale_color_manual(guide="none",
+                       values=c("black", "red")) +
+    scale_alpha_manual(guide="none",
+                       values=c(0.5, 1)) +
+    theme_classic()
+```
+
+\newpage
+
+# Rutgers is a casualization standout across all R1s
+
+But forget the Big 10! Rutgers stands out among R1 universities, too: among all `r sum(chars$C15BASIC == 15)` public and private highest-research activity doctoral universities in the U.S., only three have a higher proportion of casualized faculty:
+
+
+```{r r1_casual_table}
+chars %>%
+    filter(C15BASIC == 15) %>%
+    select(UNITID, INSTNM, CONTROL) %>%
+    inner_join(total_teaching %>% filter(year == 2017), by="UNITID") %>% 
+    select(-year) %>%
+    inner_join(ttt %>% filter(year == 2017), by="UNITID") %>% 
+    mutate(frac_pt = pt_teaching / teaching,
+           frac_ntt = ntt / teaching,
+           frac_casual = frac_pt + frac_ntt) %>%
+    arrange(desc(frac_casual)) %>%
+    select(INSTNM, frac_casual, pt_teaching, ntt, teaching) %>% 
+    slice(1:10) %>%
+    mutate(INSTNM=ifelse(INSTNM == "Rutgers U-New Brunswick",
+                         str_c("\\textbf{", INSTNM, "}"),
+                         INSTNM)) %>%
+    mutate(INSTNM=str_replace(INSTNM, "University", "U")) %>%
+    mutate(INSTNM=str_replace(INSTNM, "-Seattle Campus", "")) %>%
+    mutate(frac_casual = str_c(round(100 * frac_casual), "%")) %>%
+    rename("R1 University"=INSTNM,
+           "% PT/NTT"=frac_casual,
+           "PT"=pt_teaching,
+           "NTT"=ntt,
+           "Total Instructors"=teaching) %>%
+    kable(caption="R1 universities with highest proportion of part-time and full-time NTT faculty in 2017. IPEDS data.",
+          align="lrrrr")
+```
+
+# The Rutgers Tenure Track Is Stagnant
+
+Rutgers's staffing practices are set to keep us at our high rank, by increasing the use of NTTs, continuing to rely on a large pool of PTLs, and adding few or no new tenure lines. 
+
+```{r ru_staff_big10, fig.cap="Proportions of all instructional staff (including TAs). Rutgers-NB is in red; other Big 10 institutions are in grey. IPEDS data.", fig.pos="H"}
+rustaffcats <- c(
+    "PT faculty"="frac_pt",
+    "NTT faculty"="frac_ntt",
+    "T/TT faculty"="frac_ttt",
+    "TAs"="frac_ga")
+big10_fac %>%
+    mutate(runb=factor(UNITID == unitid_runb,
+                       levels=c(F, T),
+                       labels=c("Other Big 10", "RU-NB"))) %>%
+    select(year, runb, UNITID, one_of(rustaffcats)) %>%
+    group_by(year, UNITID) %>%
+    gather("staff", "frac", -year, -runb, -UNITID) %>%
+    mutate(staff=factor(staff, levels=rustaffcats,
+                        labels=names(rustaffcats))) %>% 
+    ggplot(aes(year, frac, group=UNITID, color=runb, alpha=runb)) +
+        geom_line() + geom_point() +
+        facet_wrap(~ staff, nrow=1) +
+        scale_y_continuous(name="\\% of instructional staff",
+                           labels=pct,
+                           limits=c(0, NA)) +
+        scale_color_manual(guide=guide_legend(title=NULL),
+                           values=c("black", "red")) +
+        scale_alpha_manual(guide=guide_legend(title=NULL),
+                           values=c(0.1, 1)) +
+        theme_classic() +
+        theme(legend.position="bottom",
+              strip.background=element_blank(),
+              axis.text.x=element_text(angle=90, vjust=0.5))
+```
+
+Though the proportion of tenured and tenure-track faculty increased slightly from 2016 to 2017, this is _not_ due to a numerical increase but only to a decrease in the number of PTLs, who remain by far the largest category of instructional staff.
+
+```{r ru_staff_counts, fig.cap="Absolute numbers of Rutgers-New Brunswick instructional staff, by type. IPEDS data.", fig.pos="H"}
+ru_staff_data <- big10_fac %>%
+    filter(UNITID == unitid_runb) %>%
+    select(year,
+           "Part-time"=pt_teaching,
+           "TAs"=ga_teaching,
+           "Tenured"=tenured,
+           "Tenure-track"=tenure_track,
+           "Full-time NTT"=ntt) %>%
+    gather("type", "n", -year)
+ru_staff_data %>%
+    ggplot(aes(year, n, color=type)) +
+        geom_line(aes(linetype=type)) + geom_point() +
+        geom_text_repel(
+            data=ru_staff_data %>% filter(year == 2017),
+            aes(year, n, label=type, color=type),
+            alpha=1, size=4,
+            hjust=0, direction="y", nudge_x=0.2,
+            segment.size=0.2, segment.alpha=0.25) +
+        scale_x_continuous(breaks=years, limits=c(NA, 2019)) +
+        scale_linetype_discrete(guide="none") +
+        scale_color_discrete(guide="none") +
+        labs(y="Number of instructors") +
+        theme_classic()
+```
+
+# Where have all the Rutgers TAs gone?
+
+The reduction in TAs is the most dramatic transformation of the staffing pattern at Rutgers since the UMDNJ merger. The number of teaching graduate assistants (which is to say TAs) at RU-NB has been sharply cut over the last five years, from `r big10_fac %>% filter(UNITID == unitid_runb, year == min(years)) %>% pull(ga_teaching)` to `r big10_fac %>% filter(UNITID == unitid_runb, year == max(years)) %>% pull(ga_teaching)`. The decrease in TAs is not the same thing as a decrease in the size of the graduate student body; rather, more graduate students are either not receiving teaching assignments or are working for even smaller salaries as part-time lecturers. Rutgers registers far and away the largest proportional decrease in the size of its TA pool in the big 10. 
+
+```{r ta_decrease, fig.cap=str_c("Difference in teaching graduate assistants between 2017 and ", min(years), " as a proportion of the earlier total. IPEDS data."), fig.pos="H"}
+big10_fac %>%
+    filter(year %in% range(years)) %>%
+    select(UNITID, INSTNM, year, ga_teaching) %>%
+    arrange(INSTNM, year) %>%
+    group_by(INSTNM) %>%
+    summarize(ga_change = diff(ga_teaching) / first(ga_teaching)) %>%
+    mutate(INSTNM=factor(
+                         INSTNM,
+                         levels=INSTNM[order(ga_change)], ordered=T)) %>%
+    ggplot(aes(INSTNM, ga_change)) +
+        geom_col() +
+        geom_text(aes(x=INSTNM,
+                      y=ifelse(ga_change < 0, 0, ga_change),
+                      label=INSTNM),
+                  angle=90, hjust=0, nudge_y=0.025, size=3) +
+        scale_y_continuous(
+            name=str_c("Change in TAs from ", min(years), " to 2017"),
+            limits=c(NA, 0.4),
+            labels=pct) +
+        xlab("") +
+        theme_classic() +
+        theme(axis.text.x=element_blank(),
+              axis.ticks.x=element_blank(),
+              axis.line.x=element_blank())
+```
+
+\newpage
+
+# Details of the Big 10 Comparison
+
+```{r big10plot}
+big10_plot <- function (x, var) {
+    var <- enquo(var)
+    instorder <- x %>%
+        filter(year == 2017) %>%
+        select(INSTNM, !! var) %>%
+        arrange(desc(!! var)) %>%
+        pull(INSTNM)
+    
+    x %>%
+        mutate(
+            INSTNM=factor(INSTNM, levels=instorder,
+                          labels=str_wrap(instorder, width=20),
+                          ordered=T)) %>%
+        mutate(runb=factor(UNITID == unitid_runb,
+                           levels=c(F, T))) %>% 
+        ggplot(aes(year, !! var, color=runb)) +
+            geom_line() + geom_point() +
+            facet_wrap(~ INSTNM, nrow=2) +
+            scale_y_continuous(limits=c(0, NA), labels=pct) +
+            scale_color_manual(guide="none",
+                               values=c("black", "red")) +
+            theme_classic() +
+            theme(strip.text=element_text(size=6),
+                  strip.background=element_blank(),
+                  axis.text.x=element_text(angle=90, vjust=0.5))
+}
+```
+
+The following charts and table compare Rutgers-New Brunswick to other Big 10 campuses in the changing proportion of each faculty category over time. In all cases, the proportions are out of all instructional staff, comprising all part-time and full-time instructional staff as well as teaching graduate assistants.
+
+```{r big10_tenured, fig.cap="Proportion of tenured faculty. IPEDS data.", fig.pos="H"}
+big10_plot(big10_fac, frac_tenured) +
+    labs(y="\\% Tenured")
+```
+
+```{r big10_tt, fig.cap="Proportion of tenure-track faculty. IPEDS data.", fig.pos="H"}
+big10_fac %>% big10_plot(frac_tt) +
+    labs(y="\\% Tenure-track")
+```
+
+```{r big10_ttt, fig.cap="Proportion of tenured or tenure-track faculty. IPEDS data.", fig.pos="H"}
+big10_fac %>% big10_plot(frac_ttt) +
+    labs(y="\\% T/TT")
+```
+
+```{r big10_ntt, fig.cap="Proportion of full-time NTT faculty. IPEDS data.", fig.pos="H"}
+big10_fac %>% big10_plot(frac_ntt) +
+    labs(y="\\% NTT")
+```
+
+```{r big10_pt, fig.cap="Proportion of part-time faculty. IPEDS data.", fig.pos="H"}
+big10_fac %>% big10_plot(frac_pt) +
+    labs(y="\\% Part-time")
+```
+
+```{r big10_ga, fig.cap="Proportion of teaching graduate assistants. IPEDS data.", fig.pos="H"}
+big10_fac %>% big10_plot(frac_ga) +
+    labs(y="\\% TAs")
+```
+
+\newpage
+\tiny 
+
+```{r big10_table}
+big10table <- big10_fac %>% 
+    mutate_at(vars(starts_with("frac")), pct) %>%
+    mutate(INSTNM=str_replace(INSTNM, "University", "U")) %>%
+    mutate(INSTNM=str_replace(INSTNM, "-Main Campus", "")) %>%
+    arrange(INSTNM, year) %>%
+    select("Big 10 Campus"=INSTNM,
+           year,
+           "Total"=teaching,
+           "T"=tenured,
+           "% T"=frac_tenured,
+           TT=tenure_track,
+           "% TT"=frac_tt,
+           "% T/TT"=frac_ttt,
+           NTT=ntt,
+           "% NTT"=frac_ntt,
+           "PT"=pt_teaching,
+           "% PT"=frac_pt,
+           TA=ga_teaching,
+           "% TA"=frac_ga)
+
+big10table[ , 1:8] %>%
+    kable(align="lrrrrrrr")
+big10table[ , c(1:2, 9:14)] %>%
+    kable(align="lrrrrrrr")
+```
+
+Source code for reproducing this document may be found at <https://github.com/agoldst/stay-casual-runb>.
